@@ -1,13 +1,25 @@
-import joblib
-import numpy as np
 import pandas as pd
+import numpy as np
 import requests
+import joblib
 
 # Load once at import time
 HISTORY = pd.read_csv("shop_history.csv", parse_dates=["appearance_date"])
-
-# Load the trained predictor model
 PREDICTOR = joblib.load("predictor.joblib")
+
+
+def _run_gaps(dates):
+    """Gaps in days between runs of consecutive shop days."""
+    if len(dates) < 2:
+        return []
+    starts, ends = [dates[0]], []
+    for i in range(1, len(dates)):
+        if (dates[i] - dates[i-1]).days > 1:
+            ends.append(dates[i-1])
+            starts.append(dates[i])
+    ends.append(dates[-1])
+    return [(starts[i] - ends[i-1]).days for i in range(1, len(ends))]
+
 
 def lookup_item(name: str) -> dict:
     """Look up shop history for a single cosmetic by name (fuzzy match)."""
@@ -16,7 +28,6 @@ def lookup_item(name: str) -> dict:
     if matches.empty:
         return {"found": False, "message": f"No cosmetic found matching '{name}'."}
 
-    # Pick the most-appeared match
     top_id = matches["item_id"].value_counts().idxmax()
     matches = matches[matches["item_id"] == top_id]
 
@@ -73,6 +84,7 @@ def find_rare_returns(min_days: int = 100) -> dict:
     rare.sort(key=lambda x: x["days_since_last_seen"], reverse=True)
     return {"count": len(rare), "items": rare}
 
+
 def predict_return(name: str) -> dict:
     """Predict probability that a Fortnite item returns to the shop within 30 days."""
     matches = HISTORY[HISTORY["name"].str.lower().str.contains(name.lower(), na=False)]
@@ -93,8 +105,8 @@ def predict_return(name: str) -> dict:
     total_so_far = len(dates)
     item_age_days = (today - dates[0]).days
 
-    if len(dates) >= 2:
-        gaps = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
+    gaps = _run_gaps(dates)
+    if gaps:
         mean_gap = float(np.mean(gaps))
         median_gap = float(np.median(gaps))
         std_gap = float(np.std(gaps)) if len(gaps) > 1 else 0.0
@@ -109,7 +121,6 @@ def predict_return(name: str) -> dict:
     rarity = item_history.iloc[0]["rarity"]
     item_type = item_history.iloc[0]["type"]
 
-    # Build feature row matching training schema
     features = {
         "days_since_last": days_since_last,
         "total_appearances_so_far": total_so_far,

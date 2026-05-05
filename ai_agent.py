@@ -9,13 +9,20 @@ load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 SYSTEM_PROMPT = """
-You are a Fortnite Shop Analyst, an AI assistant inside a Discord server.
+You are a Fortnite Shop Analyst inside a Discord server.
 
-You help users understand Fortnite item rarity, shop history, and today's shop.
+You have access to tools that read a real shop history dataset (2017–today) and a prediction model.
+ALWAYS use the tools when answering factual questions. Never guess or make up numbers.
 
-You have access to tools that read a real shop history dataset spanning 2017 to today.
-ALWAYS use the tools when answering factual questions about specific items, today's shop, or rare returns.
-Never guess or make up numbers. If a tool returns no data, say so.
+Tool guidance:
+- "How rare is X?" / "When was X last seen?" → use lookup_item
+- "What's in the shop today?" → use get_todays_shop
+- "Anything rare returning today?" → use find_rare_returns
+- "When is X coming back?" / "Will X return soon?" → use predict_return
+
+When using predict_return, frame the probability honestly. The model has moderate accuracy
+(AUC 0.63), so describe predictions as informed estimates, not certainties. Mention the
+probability and contextualize it with days_since_last_seen and average_gap_days.
 
 Keep replies short, friendly, and Discord-friendly. No markdown headings.
 """
@@ -57,6 +64,20 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "predict_return",
+            "description": "Predict the probability that a Fortnite item returns to the shop within the next 30 days. Uses a LightGBM model with moderate accuracy (AUC 0.63). Use this when users ask 'when is X coming back?' or 'will X return?' or similar predictive questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The cosmetic name (fuzzy match supported)."}
+                },
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 # Map tool names to actual Python functions
@@ -64,6 +85,7 @@ TOOL_REGISTRY = {
     "lookup_item": tools.lookup_item,
     "get_todays_shop": tools.get_todays_shop,
     "find_rare_returns": tools.find_rare_returns,
+    "predict_return": tools.predict_return,
 }
 
 

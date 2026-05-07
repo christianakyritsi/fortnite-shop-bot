@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 
+from aiohttp import web
+import asyncio
 from ai_agent import ask_llama
 import aiohttp
 import discord
@@ -18,6 +20,17 @@ DEV_GUILD = discord.Object(id=int(GUILD_ID_RAW)) if GUILD_ID_RAW else None
 intents = discord.Intents.default()
 intents.message_content = True
 intents.dm_messages = True  # required to receive DMs
+
+async def health_check(request):
+    return web.Response(text="Ark is alive 💜")
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
@@ -154,4 +167,9 @@ if __name__ == "__main__":
             "DISCORD_BOT_TOKEN not found. "
             "Make sure your .env file defines DISCORD_BOT_TOKEN"
         )
-    client.run(TOKEN)
+    
+    async def main():
+        await start_health_server()
+        await client.start(TOKEN)
+    
+    asyncio.run(main())

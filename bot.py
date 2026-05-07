@@ -1,44 +1,81 @@
 import os
 import pandas as pd
 
+from ai_agent import ask_llama
 import aiohttp
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-# Loading the .env file with the discord bot token
 load_dotenv()
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-# Using capitals for constant variables 
-TOKEN=os.getenv("DISCORD_BOT_TOKEN")
+# Optional: dev-only guild for instant slash command sync.
+# Set DISCORD_GUILD_ID in your local .env. Leave it unset in production.
+GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID")
+DEV_GUILD = discord.Object(id=int(GUILD_ID_RAW)) if GUILD_ID_RAW else None
 
-# Server id 
-GUILD_ID=discord.Object(id=1499702607483109386)
-
-# What kind of events the bot wants to receive
 intents = discord.Intents.default()
+intents.message_content = True
+intents.dm_messages = True  # required to receive DMs
 
-# Object representing our bot's connection to Discord
-# client handles the connection
 client = discord.Client(intents=intents)
-
-# Slash commands need to be stored in their own registry before being synced to discord
-# tree is attached to our specific client
 tree = app_commands.CommandTree(client)
 
 # Load shop history dataset
-HISTORY=pd.read_csv("shop_history.csv", parse_dates=["appearance_date"])
+HISTORY = pd.read_csv("shop_history.csv", parse_dates=["appearance_date"])
+
 
 @client.event
 async def on_ready():
-    await tree.sync(guild=GUILD_ID)
+    if DEV_GUILD:
+        # Dev mode: sync to one server instantly
+        tree.copy_global_to(guild=DEV_GUILD)
+        await tree.sync(guild=DEV_GUILD)
+        print(f"Synced commands to dev guild {DEV_GUILD.id}")
+    else:
+        # Production: global sync (takes up to ~1 hour to propagate)
+        await tree.sync()
+        print("Synced commands globally (may take up to 1 hour to appear)")
     print(f"Logged in as {client.user}")
 
-@tree.command(name="ping", description="Check if the bot is alive", guild=GUILD_ID)
+
+@client.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    is_dm = message.guild is None
+    is_mention = client.user in message.mentions
+
+    # In servers: only reply when mentioned. In DMs: reply to everything.
+    if not is_dm and not is_mention:
+        return
+
+    user_text = message.content
+    if is_mention:
+        user_text = user_text.replace(f"<@{client.user.id}>", "").strip()
+        user_text = user_text.replace(f"<@!{client.user.id}>", "").strip()
+    user_text = user_text.strip()
+
+    if not user_text:
+        await message.reply("Ask me about Fortnite shop rarity, item history, or today's shop 🙂")
+        return
+
+    async with message.channel.typing():
+        try:
+            response = ask_llama(user_text)
+            await message.reply(response[:1900])
+        except Exception as e:
+            await message.reply(f"LLM error: `{e}`")
+
+
+@tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong! 🏓")
 
-@tree.command(name="shop", description="Check the shop", guild=GUILD_ID)
+
+@tree.command(name="shop", description="Check the shop")
 async def shop(interaction: discord.Interaction):
     await interaction.response.defer()
     async with aiohttp.ClientSession() as session:
@@ -48,7 +85,7 @@ async def shop(interaction: discord.Interaction):
             for entry in data["data"]["entries"]:
                 if "brItems" in entry:
                     cosmetics.append(entry)
-                    if len(cosmetics)==10:
+                    if len(cosmetics) == 10:
                         break
             embed = discord.Embed(title="Today's Shop")
             for entry in cosmetics:
@@ -75,18 +112,17 @@ async def shop(interaction: discord.Interaction):
                 )
             await interaction.followup.send(embed=embed)
 
-@tree.command(name="lookup", description="Show shop history for a cosmetic", guild=GUILD_ID)
+
+@tree.command(name="lookup", description="Show shop history for a cosmetic")
 @app_commands.describe(name="Cosmetic name (e.g. Renegade Raider)")
 async def lookup(interaction: discord.Interaction, name: str):
     await interaction.response.defer()
 
     matches = HISTORY[HISTORY["name"].str.lower().str.contains(name.lower(), na=False)]
-
     if matches.empty:
         await interaction.followup.send(f"No cosmetic found matching '{name}'.")
         return
 
-    # If multiple items match, pick the one with the most appearances
     top_id = matches["item_id"].value_counts().idxmax()
     matches = matches[matches["item_id"] == top_id]
 
@@ -111,10 +147,11 @@ async def lookup(interaction: discord.Interaction, name: str):
 
     await interaction.followup.send(embed=embed)
 
+
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError(
-        "DISCORD_BOT_TOKEN not found. "
-        "Make sure your .env file defines DISCORD_BOT_TOKEN"
+            "DISCORD_BOT_TOKEN not found. "
+            "Make sure your .env file defines DISCORD_BOT_TOKEN"
         )
     client.run(TOKEN)
